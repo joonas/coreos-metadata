@@ -15,6 +15,7 @@
 package main
 
 import (
+	"errors"
 	"flag"
 	"fmt"
 	"io/ioutil"
@@ -80,14 +81,13 @@ func main() {
 		flags.provider = parseCmdline(args)
 	}
 
-	switch flags.provider {
-	case "azure", "digitalocean", "ec2", "gce", "packet", "openstack-metadata":
-	default:
+	provider, err := GetMetadataProvider(flags.provider)
+	if err != nil {
 		fmt.Fprintf(os.Stderr, "invalid provider %q\n", flags.provider)
 		os.Exit(2)
 	}
 
-	metadata, err := fetchMetadata(flags.provider)
+	metadata, err := provider.FetchMetadata()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "failed to fetch metadata: %v\n", err)
 		os.Exit(1)
@@ -114,6 +114,25 @@ func main() {
 	}
 }
 
+func GetMetadataProvider(providerName string) (providers.MetadataProvider, error) {
+	switch providerName {
+	case "azure":
+		return azure.NewMetadataProvider()
+	case "digitalocean":
+		return digitalocean.NewMetadataProvider()
+	case "ec2":
+		return ec2.NewMetadataProvider()
+	case "gce":
+		return gce.NewMetadataProvider()
+	case "packet":
+		return packet.NewMetadataProvider()
+	case "openstack-metadata":
+		return openstackMetadata.NewMetadataProvider()
+	default:
+		return nil, errors.New("unknown provider")
+	}
+}
+
 func parseCmdline(cmdline []byte) (oem string) {
 	for _, arg := range strings.Split(string(cmdline), " ") {
 		parts := strings.SplitN(strings.TrimSpace(arg), "=", 2)
@@ -129,25 +148,6 @@ func parseCmdline(cmdline []byte) (oem string) {
 	}
 
 	return
-}
-
-func fetchMetadata(provider string) (providers.Metadata, error) {
-	switch provider {
-	case "azure":
-		return azure.FetchMetadata()
-	case "digitalocean":
-		return digitalocean.FetchMetadata()
-	case "ec2":
-		return ec2.FetchMetadata()
-	case "gce":
-		return gce.FetchMetadata()
-	case "packet":
-		return packet.FetchMetadata()
-	case "openstack-metadata":
-		return openstackMetadata.FetchMetadata()
-	default:
-		panic("bad provider")
-	}
 }
 
 func writeVariable(out *os.File, key string, value string) (err error) {

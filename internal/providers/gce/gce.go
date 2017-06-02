@@ -25,20 +25,39 @@ import (
 	"github.com/coreos/coreos-metadata/internal/retry"
 )
 
-func FetchMetadata() (providers.Metadata, error) {
-	public, err := fetchIP("instance/network-interfaces/0/access-configs/0/external-ip")
+type gceMetadataProvider struct {
+	client *retry.Client
+}
+
+var _ providers.MetadataProvider = &gceMetadataProvider{}
+
+func NewMetadataProvider() (providers.MetadataProvider, error) {
+	return &gceMetadataProvider{
+		client: &retry.Client{
+			InitialBackoff: time.Second,
+			MaxBackoff:     time.Second * 5,
+			MaxAttempts:    10,
+			Header: map[string][]string{
+				"Metadata-Flavor": {"Google"},
+			},
+		},
+	}, nil
+}
+
+func (gcemp *gceMetadataProvider) FetchMetadata() (providers.Metadata, error) {
+	public, err := gcemp.fetchIP("instance/network-interfaces/0/access-configs/0/external-ip")
 	if err != nil {
 		return providers.Metadata{}, err
 	}
-	local, err := fetchIP("instance/network-interfaces/0/ip")
+	local, err := gcemp.fetchIP("instance/network-interfaces/0/ip")
 	if err != nil {
 		return providers.Metadata{}, err
 	}
-	hostname, _, err := fetchString("instance/hostname")
+	hostname, _, err := gcemp.fetchString("instance/hostname")
 	if err != nil {
 		return providers.Metadata{}, err
 	}
-	sshKeys, err := fetchAllSshKeys()
+	sshKeys, err := gcemp.fetchAllSshKeys()
 	if err != nil {
 		return providers.Metadata{}, err
 	}
@@ -54,8 +73,8 @@ func FetchMetadata() (providers.Metadata, error) {
 	}, nil
 }
 
-func fetchAllSshKeys() ([]string, error) {
-	deprecatedInstanceSshKeys, err := fetchSshKeys("instance/attributes/sshKeys")
+func (gcemp *gceMetadataProvider) fetchAllSshKeys() ([]string, error) {
+	deprecatedInstanceSshKeys, err := gcemp.fetchSshKeys("instance/attributes/sshKeys")
 	if err != nil {
 		return nil, err
 	}
@@ -64,12 +83,12 @@ func fetchAllSshKeys() ([]string, error) {
 		return deprecatedInstanceSshKeys, nil
 	}
 
-	instanceSshKeys, err := fetchSshKeys("instance/attributes/ssh-keys")
+	instanceSshKeys, err := gcemp.fetchSshKeys("instance/attributes/ssh-keys")
 	if err != nil {
 		return nil, err
 	}
 
-	blockProjectKeys, _, err := fetchString("instance/attributes/block-project-ssh-keys")
+	blockProjectKeys, _, err := gcemp.fetchString("instance/attributes/block-project-ssh-keys")
 	if err != nil {
 		return nil, err
 	}
@@ -78,7 +97,7 @@ func fetchAllSshKeys() ([]string, error) {
 		return instanceSshKeys, nil
 	}
 
-	projectSshKeys, err := fetchSshKeys("project/attributes/sshKeys")
+	projectSshKeys, err := gcemp.fetchSshKeys("project/attributes/sshKeys")
 	if err != nil {
 		return nil, err
 	}
@@ -86,15 +105,8 @@ func fetchAllSshKeys() ([]string, error) {
 	return append(instanceSshKeys, projectSshKeys...), nil
 }
 
-func fetchString(key string) (string, bool, error) {
-	body, err := retry.Client{
-		InitialBackoff: time.Second,
-		MaxBackoff:     time.Second * 5,
-		MaxAttempts:    10,
-		Header: map[string][]string{
-			"Metadata-Flavor": {"Google"},
-		},
-	}.Get("http://metadata.google.internal/computeMetadata/v1/" + key)
+func (gcemp *gceMetadataProvider) fetchString(key string) (string, bool, error) {
+	body, err := gcemp.client.Get("http://metadata.google.internal/computeMetadata/v1/" + key)
 
 	// Google's metadata service returns a 200 success even if there is no
 	// resource. Instead of checking to see if there is a body, check to see
@@ -102,8 +114,8 @@ func fetchString(key string) (string, bool, error) {
 	return string(body), len(body) > 0, err
 }
 
-func fetchIP(key string) (net.IP, error) {
-	str, present, err := fetchString(key)
+func (gcemp *gceMetadataProvider) fetchIP(key string) (net.IP, error) {
+	str, present, err := gcemp.fetchString(key)
 	if err != nil {
 		return nil, err
 	}
@@ -119,8 +131,8 @@ func fetchIP(key string) (net.IP, error) {
 	}
 }
 
-func fetchSshKeys(prefix string) ([]string, error) {
-	keydata, present, err := fetchString(prefix)
+func (gcemp *gceMetadataProvider) fetchSshKeys(prefix string) ([]string, error) {
+	keydata, present, err := gcemp.fetchString(prefix)
 	if err != nil {
 		return nil, fmt.Errorf("error reading keys: %v", err)
 	}

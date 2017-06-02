@@ -26,12 +26,24 @@ import (
 	"github.com/packethost/packngo/metadata"
 )
 
-func FetchMetadata() (providers.Metadata, error) {
-	body, err := retry.Client{
-		InitialBackoff: time.Second,
-		MaxBackoff:     time.Second * 5,
-		MaxAttempts:    10,
-	}.Get(metadata.BaseURL + "/metadata")
+type packetMetadataProvider struct {
+	client *retry.Client
+}
+
+var _ providers.MetadataProvider = &packetMetadataProvider{}
+
+func NewMetadataProvider() (providers.MetadataProvider, error) {
+	return &packetMetadataProvider{
+		client: &retry.Client{
+			InitialBackoff: time.Second,
+			MaxBackoff:     time.Second * 5,
+			MaxAttempts:    10,
+		},
+	}, nil
+}
+
+func (pmp *packetMetadataProvider) FetchMetadata() (providers.Metadata, error) {
+	body, err := pmp.client.Get(metadata.BaseURL + "/metadata")
 	if err != nil {
 		return providers.Metadata{}, err
 	}
@@ -50,7 +62,7 @@ func FetchMetadata() (providers.Metadata, error) {
 		return providers.Metadata{}, errors.New(data.Error)
 	}
 
-	attrs := ipAddresses(data.Network)
+	attrs := pmp.ipAddresses(data.Network)
 	attrs["PACKET_HOSTNAME"] = data.Hostname
 	attrs["PACKET_PHONE_HOME_URL"] = data.PhoneHomeURL
 
@@ -61,7 +73,7 @@ func FetchMetadata() (providers.Metadata, error) {
 	}, nil
 }
 
-func ipAddresses(network metadata.NetworkInfo) map[string]string {
+func (pmp *packetMetadataProvider) ipAddresses(network metadata.NetworkInfo) map[string]string {
 	var publicIPv4, privateIPv4, publicIPv6, privateIPv6 []net.IP
 
 	for _, addr := range network.Addresses {

@@ -43,30 +43,46 @@ type instanceIdDoc struct {
 	ImageId            string `json:"imageId"`
 }
 
-func FetchMetadata() (providers.Metadata, error) {
-	instanceId, _, err := fetchString("meta-data/instance-id")
+type ec2MetadataProvider struct {
+	client *retry.Client
+}
+
+var _ providers.MetadataProvider = &ec2MetadataProvider{}
+
+func NewMetadataProvider() (providers.MetadataProvider, error) {
+	return &ec2MetadataProvider{
+		client: &retry.Client{
+			InitialBackoff: time.Second,
+			MaxBackoff:     time.Second * 5,
+			MaxAttempts:    10,
+		},
+	}, nil
+}
+
+func (ec2mp *ec2MetadataProvider) FetchMetadata() (providers.Metadata, error) {
+	instanceId, _, err := ec2mp.fetchString("meta-data/instance-id")
 	if err != nil {
 		return providers.Metadata{}, err
 	}
 
-	public, err := fetchIP("meta-data/public-ipv4")
+	public, err := ec2mp.fetchIP("meta-data/public-ipv4")
 	if err != nil {
 		return providers.Metadata{}, err
 	}
-	local, err := fetchIP("meta-data/local-ipv4")
+	local, err := ec2mp.fetchIP("meta-data/local-ipv4")
 	if err != nil {
 		return providers.Metadata{}, err
 	}
-	hostname, _, err := fetchString("meta-data/hostname")
+	hostname, _, err := ec2mp.fetchString("meta-data/hostname")
 	if err != nil {
 		return providers.Metadata{}, err
 	}
-	availabilityZone, _, err := fetchString("meta-data/placement/availability-zone")
+	availabilityZone, _, err := ec2mp.fetchString("meta-data/placement/availability-zone")
 	if err != nil {
 		return providers.Metadata{}, err
 	}
 
-	instanceIdDocBlob, _, err := fetchString("dynamic/instance-identity/document")
+	instanceIdDocBlob, _, err := ec2mp.fetchString("dynamic/instance-identity/document")
 	if err != nil {
 		return providers.Metadata{}, err
 	}
@@ -76,7 +92,7 @@ func FetchMetadata() (providers.Metadata, error) {
 		return providers.Metadata{}, err
 	}
 
-	sshKeys, err := fetchSshKeys()
+	sshKeys, err := ec2mp.fetchSshKeys()
 	if err != nil {
 		return providers.Metadata{}, err
 	}
@@ -95,17 +111,13 @@ func FetchMetadata() (providers.Metadata, error) {
 	}, nil
 }
 
-func fetchString(key string) (string, bool, error) {
-	body, err := retry.Client{
-		InitialBackoff: time.Second,
-		MaxBackoff:     time.Second * 5,
-		MaxAttempts:    10,
-	}.Get("http://169.254.169.254/2009-04-04/" + key)
+func (ec2mp *ec2MetadataProvider) fetchString(key string) (string, bool, error) {
+	body, err := ec2mp.client.Get("http://169.254.169.254/2009-04-04/" + key)
 	return string(body), (body != nil), err
 }
 
-func fetchIP(key string) (net.IP, error) {
-	str, present, err := fetchString(key)
+func (ec2mp *ec2MetadataProvider) fetchIP(key string) (net.IP, error) {
+	str, present, err := ec2mp.fetchString(key)
 	if err != nil {
 		return nil, err
 	}
@@ -121,8 +133,8 @@ func fetchIP(key string) (net.IP, error) {
 	}
 }
 
-func fetchSshKeys() ([]string, error) {
-	keydata, present, err := fetchString("public-keys")
+func (ec2mp *ec2MetadataProvider) fetchSshKeys() ([]string, error) {
+	keydata, present, err := ec2mp.fetchString("public-keys")
 	if err != nil {
 		return nil, fmt.Errorf("error reading keys: %v", err)
 	}
@@ -151,7 +163,7 @@ func fetchSshKeys() ([]string, error) {
 
 	keys := []string{}
 	for _, id := range keyIDs {
-		sshkey, _, err := fetchString(fmt.Sprintf("public-keys/%s/openssh-key", id))
+		sshkey, _, err := ec2mp.fetchString(fmt.Sprintf("public-keys/%s/openssh-key", id))
 		if err != nil {
 			return nil, err
 		}

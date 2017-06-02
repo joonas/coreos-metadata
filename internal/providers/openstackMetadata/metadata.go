@@ -28,27 +28,43 @@ const (
 	metadataEndpoint = "http://169.254.169.254/latest/meta-data/"
 )
 
-func FetchMetadata() (providers.Metadata, error) {
+type openstackMetadataProvider struct {
+	client *retry.Client
+}
+
+var _ providers.MetadataProvider = &openstackMetadataProvider{}
+
+func NewMetadataProvider() (providers.MetadataProvider, error) {
+	return &openstackMetadataProvider{
+		client: &retry.Client{
+			InitialBackoff: time.Second,
+			MaxBackoff:     time.Second * 5,
+			MaxAttempts:    10,
+		},
+	}, nil
+}
+
+func (omp *openstackMetadataProvider) FetchMetadata() (providers.Metadata, error) {
 	m := providers.Metadata{}
 	m.Attributes = make(map[string]string)
 
-	if err := fetchAndSet("instance-id", "OPENSTACK_INSTANCE_ID", m.Attributes); err != nil {
+	if err := omp.fetchAndSet("instance-id", "OPENSTACK_INSTANCE_ID", m.Attributes); err != nil {
 		return providers.Metadata{}, err
 	}
 
-	if err := fetchAndSet("local-ipv4", "OPENSTACK_IPV4_LOCAL", m.Attributes); err != nil {
+	if err := omp.fetchAndSet("local-ipv4", "OPENSTACK_IPV4_LOCAL", m.Attributes); err != nil {
 		return providers.Metadata{}, err
 	}
 
-	if err := fetchAndSet("public-ipv4", "OPENSTACK_IPV4_PUBLIC", m.Attributes); err != nil {
+	if err := omp.fetchAndSet("public-ipv4", "OPENSTACK_IPV4_PUBLIC", m.Attributes); err != nil {
 		return providers.Metadata{}, err
 	}
 
-	if err := fetchAndSet("hostname", "OPENSTACK_HOSTNAME", m.Attributes); err != nil {
+	if err := omp.fetchAndSet("hostname", "OPENSTACK_HOSTNAME", m.Attributes); err != nil {
 		return providers.Metadata{}, err
 	}
 
-	keys, err := fetchKeys()
+	keys, err := omp.fetchKeys()
 	if err != nil {
 		return providers.Metadata{}, err
 	}
@@ -57,8 +73,8 @@ func FetchMetadata() (providers.Metadata, error) {
 	return m, nil
 }
 
-func fetchAndSet(key, attrKey string, attributes map[string]string) error {
-	val, ok, err := fetchMetadata(key)
+func (omp *openstackMetadataProvider) fetchAndSet(key, attrKey string, attributes map[string]string) error {
+	val, ok, err := omp.fetchMetadata(key)
 	if err != nil {
 		return err
 	}
@@ -69,8 +85,8 @@ func fetchAndSet(key, attrKey string, attributes map[string]string) error {
 	return nil
 }
 
-func fetchKeys() ([]string, error) {
-	keysListBlob, ok, err := fetchMetadata("public-keys")
+func (omp *openstackMetadataProvider) fetchKeys() ([]string, error) {
+	keysListBlob, ok, err := omp.fetchMetadata("public-keys")
 	if err != nil {
 		return nil, err
 	}
@@ -89,7 +105,7 @@ func fetchKeys() ([]string, error) {
 		}
 		keyNum := keyTokens[0]
 		// keyTokens[1] is the name of the key, but is currently unused here
-		key, ok, err := fetchMetadata(path.Join("public-keys", keyNum, "openssh-key"))
+		key, ok, err := omp.fetchMetadata(path.Join("public-keys", keyNum, "openssh-key"))
 		if err != nil {
 			return nil, err
 		}
@@ -101,11 +117,7 @@ func fetchKeys() ([]string, error) {
 	return keys, nil
 }
 
-func fetchMetadata(key string) (string, bool, error) {
-	body, err := retry.Client{
-		InitialBackoff: time.Second,
-		MaxBackoff:     time.Second * 5,
-		MaxAttempts:    10,
-	}.Get(metadataEndpoint + key)
+func (omp *openstackMetadataProvider) fetchMetadata(key string) (string, bool, error) {
+	body, err := omp.client.Get(metadataEndpoint + key)
 	return string(body), (body != nil), err
 }

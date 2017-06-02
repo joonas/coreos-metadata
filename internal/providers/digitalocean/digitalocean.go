@@ -56,12 +56,24 @@ type Metadata struct {
 	DNS        DNS        `json:"dns"`
 }
 
-func FetchMetadata() (providers.Metadata, error) {
-	body, err := retry.Client{
-		InitialBackoff: time.Second,
-		MaxBackoff:     time.Second * 5,
-		MaxAttempts:    10,
-	}.Get("http://169.254.169.254/metadata/v1.json")
+type digitaloceanMetadataProvider struct {
+	client *retry.Client
+}
+
+var _ providers.MetadataProvider = &digitaloceanMetadataProvider{}
+
+func NewMetadataProvider() (providers.MetadataProvider, error) {
+	return &digitaloceanMetadataProvider{
+		client: &retry.Client{
+			InitialBackoff: time.Second,
+			MaxBackoff:     time.Second * 5,
+			MaxAttempts:    10,
+		},
+	}, nil
+}
+
+func (domp *digitaloceanMetadataProvider) FetchMetadata() (providers.Metadata, error) {
+	body, err := domp.client.Get("http://169.254.169.254/metadata/v1.json")
 
 	if err != nil {
 		return providers.Metadata{}, fmt.Errorf("failed to fetch metadata: %v", err)

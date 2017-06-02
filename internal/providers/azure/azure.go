@@ -39,17 +39,38 @@ type metadata struct {
 	dynamicIPv4 net.IP
 }
 
-func FetchMetadata() (providers.Metadata, error) {
-	addr, err := getFabricAddress()
+type azureMetadataProvider struct {
+	client *retry.Client
+}
+
+var _ providers.MetadataProvider = &azureMetadataProvider{}
+
+func NewMetadataProvider() (providers.MetadataProvider, error) {
+	return &azureMetadataProvider{
+		client: &retry.Client{
+			InitialBackoff: time.Second,
+			MaxBackoff:     time.Second * 5,
+			MaxAttempts:    10,
+			Header: map[string][]string{
+				"x-ms-agent-name": {AgentName},
+				"x-ms-version":    {FabricProtocolVersion},
+				"Content-Type":    {"text/xml; charset=utf-8"},
+			},
+		},
+	}, nil
+}
+
+func (amp *azureMetadataProvider) FetchMetadata() (providers.Metadata, error) {
+	addr, err := amp.getFabricAddress()
 	if err != nil {
 		return providers.Metadata{}, err
 	}
 
-	if err := assertFabricCompatible(addr, FabricProtocolVersion); err != nil {
+	if err := amp.assertFabricCompatible(addr, FabricProtocolVersion); err != nil {
 		return providers.Metadata{}, err
 	}
 
-	config, err := fetchSharedConfig(addr)
+	config, err := amp.fetchSharedConfig(addr)
 	if err != nil {
 		return providers.Metadata{}, err
 	}
@@ -62,22 +83,7 @@ func FetchMetadata() (providers.Metadata, error) {
 	}, nil
 }
 
-func getClient() retry.Client {
-	client := retry.Client{
-		InitialBackoff: time.Second,
-		MaxBackoff:     time.Second * 5,
-		MaxAttempts:    10,
-		Header: map[string][]string{
-			"x-ms-agent-name": {AgentName},
-			"x-ms-version":    {FabricProtocolVersion},
-			"Content-Type":    {"text/xml; charset=utf-8"},
-		},
-	}
-
-	return client
-}
-
-func findLease() (*os.File, error) {
+func (amp *azureMetadataProvider) findLease() (*os.File, error) {
 	ifaces, err := net.Interfaces()
 	if err != nil {
 		return nil, fmt.Errorf("could not list interfaces: %v", err)
@@ -100,8 +106,8 @@ func findLease() (*os.File, error) {
 	}
 }
 
-func getFabricAddress() (net.IP, error) {
-	lease, err := findLease()
+func (amp *azureMetadataProvider) getFabricAddress() (net.IP, error) {
+	lease, err := amp.findLease()
 	if err != nil {
 		return nil, err
 	}
@@ -133,8 +139,8 @@ func getFabricAddress() (net.IP, error) {
 	return net.IPv4(octets[0], octets[1], octets[2], octets[3]), nil
 }
 
-func assertFabricCompatible(endpoint net.IP, desiredVersion string) error {
-	body, err := getClient().Getf("http://%s/?comp=versions", endpoint)
+func (amp *azureMetadataProvider) assertFabricCompatible(endpoint net.IP, desiredVersion string) error {
+	body, err := amp.client.Getf("http://%s/?comp=versions", endpoint)
 	if err != nil {
 		return fmt.Errorf("failed to fetch versions: %v", err)
 	}
@@ -161,10 +167,8 @@ func assertFabricCompatible(endpoint net.IP, desiredVersion string) error {
 	return fmt.Errorf("fabric version %s is not compatible", desiredVersion)
 }
 
-func fetchSharedConfig(endpoint net.IP) (metadata, error) {
-	client := getClient()
-
-	body, err := client.Getf("http://%s/machine/?comp=goalstate", endpoint)
+func (amp *azureMetadataProvider) fetchSharedConfig(endpoint net.IP) (metadata, error) {
+	body, err := amp.client.Getf("http://%s/machine/?comp=goalstate", endpoint)
 	if err != nil {
 		return metadata{}, fmt.Errorf("failed to fetch goal state: %v", err)
 	}
@@ -185,7 +189,7 @@ func fetchSharedConfig(endpoint net.IP) (metadata, error) {
 		return metadata{}, fmt.Errorf("failed to unmarshal response: %v", err)
 	}
 
-	body, err = client.Get(goal.Container.RoleInstanceList.RoleInstance.Configuration.SharedConfig)
+	body, err = amp.client.Get(goal.Container.RoleInstanceList.RoleInstance.Configuration.SharedConfig)
 	if err != nil {
 		return metadata{}, fmt.Errorf("failed to fetch shared config: %v", err)
 	}
